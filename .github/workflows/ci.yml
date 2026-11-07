@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  AIRFLOW_VERSION: "3.3.2"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.17.1 sqlfluff==4.4.0
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: sqlfluff lint snowflake airflow/dags/sql
+      - run: shellcheck bin/testbed
+
+  toolkit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pytest==9.1.1
+      - run: pytest -q
+      - name: Dry run every command
+        env:
+          TESTBED_TUNNEL_ID: 00000000-0000-4000-8000-000000000000
+        run: |
+          bin/testbed --dry-run setup
+          bin/testbed --dry-run branch up feature/pos-refunds --tunnel
+          bin/testbed --dry-run branch ui feature/pos-refunds
+          bin/testbed --dry-run test task pos_orders fetch_orders --branch feature/pos-refunds
+          bin/testbed --dry-run test dag pos_orders --branch feature/pos-refunds
+          bin/testbed --dry-run check tables pos.orders --branch feature/pos-refunds
+          bin/testbed --dry-run branch down feature/pos-refunds
+          bin/testbed --dry-run deploy
+
+  dags:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install Airflow with its constraints
+        run: >-
+          pip install "apache-airflow==${AIRFLOW_VERSION}"
+          apache-airflow-providers-snowflake apache-airflow-providers-http
+          --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${{ matrix.python-version }}.txt"
+      - run: python ci/check_dags.py airflow/dags
+      - run: python -m py_compile airflow/scripts/run_sql.py
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render the main stack and a branch stack
+        working-directory: airflow
+        env:
+          AIRFLOW_ADMIN_PASSWORD: ci
+          AIRFLOW_FERNET_KEY: ci
+          AIRFLOW_API_SECRET_KEY: ci
+          AIRFLOW_JWT_SECRET: ci
+          POSTGRES_PASSWORD: ci
+        run: |
+          docker compose --env-file .env.example config --quiet
+          printf 'AIRFLOW_PORT=8740\nAIRFLOW_EXECUTOR=LocalExecutor\nSNOWFLAKE_DATABASE=DW_BR_CI\n' > .env.branch
+          docker compose -p testbed-ci --env-file .env.example --env-file .env.branch config > "$RUNNER_TEMP/branch.yaml"
+          grep -q '8740' "$RUNNER_TEMP/branch.yaml"
+          grep -q 'AIRFLOW__CORE__EXECUTOR: LocalExecutor' "$RUNNER_TEMP/branch.yaml"
+          grep -q 'DW_BR_CI' "$RUNNER_TEMP/branch.yaml"

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+PYTHONPATH="$root/toolkit${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m testbed "$@"

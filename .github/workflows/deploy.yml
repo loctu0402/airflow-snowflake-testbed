@@ -1,0 +1,75 @@
+name: deploy
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  simulate:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Stand up the previous commit of main as the VM would run it
+        run: |
+          home="$RUNNER_TEMP/testbed"
+          git checkout --quiet --detach
+          git branch --force main HEAD
+          git clone --quiet --branch main "$GITHUB_WORKSPACE" "$home/repo"
+          if git -C "$home/repo" rev-parse --quiet --verify HEAD~1 > /dev/null; then
+            git -C "$home/repo" reset --quiet --hard HEAD~1
+          fi
+          mkdir -p "$home/worktrees" "$home/secrets"
+          touch "$home/secrets/loader.p8"
+          cd "$home/repo/airflow"
+          fernet=$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')
+          sed -e "s|^AIRFLOW_UID=.*|AIRFLOW_UID=$(id -u)|" \
+              -e "s|^AIRFLOW_ADMIN_PASSWORD=.*|AIRFLOW_ADMIN_PASSWORD=$(openssl rand -hex 12)|" \
+              -e "s|^AIRFLOW_FERNET_KEY=.*|AIRFLOW_FERNET_KEY=$fernet|" \
+              -e "s|^AIRFLOW_API_SECRET_KEY=.*|AIRFLOW_API_SECRET_KEY=$(openssl rand -hex 32)|" \
+              -e "s|^AIRFLOW_JWT_SECRET=.*|AIRFLOW_JWT_SECRET=$(openssl rand -hex 32)|" \
+              -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 12)|" \
+              -e "s|^SNOWFLAKE_KEY_PATH=.*|SNOWFLAKE_KEY_PATH=$home/secrets/loader.p8|" \
+              .env.example > .env
+          docker compose up -d
+          for attempt in $(seq 1 40); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q airflow-scheduler)")
+            if [ "$state" = healthy ]; then exit 0; fi
+            sleep 10
+          done
+          docker compose ps
+          docker compose logs --tail 40 airflow-init airflow-scheduler
+          exit 1
+      - name: Deploy the new commit with the toolkit
+        run: TESTBED_HOME="$RUNNER_TEMP/testbed" bin/testbed deploy
+      - name: Every DAG is loaded
+        working-directory: ${{ runner.temp }}/testbed/repo/airflow
+        run: |
+          docker compose exec -T airflow-scheduler airflow dags list > "$RUNNER_TEMP/dags.txt"
+          cat "$RUNNER_TEMP/dags.txt"
+          for dag in pos_orders erp_invoices delivery_trips; do grep -q "$dag" "$RUNNER_TEMP/dags.txt"; done
+      - name: Stop the simulation
+        if: always()
+        working-directory: ${{ runner.temp }}/testbed/repo/airflow
+        run: docker compose down --volumes
+
+  deploy:
+    needs: simulate
+    if: vars.TESTBED_DEPLOY_ENABLED == 'true'
+    runs-on: [self-hosted, airflow-vm]
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - run: bin/testbed deploy

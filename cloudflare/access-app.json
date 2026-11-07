@@ -1,0 +1,12 @@
+{
+  "name": "Airflow testbed",
+  "type": "self_hosted",
+  "domain": "airflow.example.dev",
+  "destinations": [
+    {"type": "public", "uri": "airflow.example.dev"},
+    {"type": "public", "uri": "*.example.dev"}
+  ],
+  "session_duration": "12h",
+  "app_launcher_visible": true,
+  "policies": []
+}

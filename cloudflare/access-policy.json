@@ -1,0 +1,8 @@
+{
+  "name": "Data team",
+  "decision": "allow",
+  "include": [
+    {"email_domain": {"domain": "example.dev"}}
+  ],
+  "session_duration": "12h"
+}

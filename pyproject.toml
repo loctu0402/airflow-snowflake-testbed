@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airflow-snowflake-testbed"
+version = "0.1.0"
+description = "Branch test environments for Airflow 3 on Snowflake zero-copy clones."
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "ruff==0.17.1", "sqlfluff==4.4.0"]
+
+[project.scripts]
+testbed = "testbed.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["toolkit"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["toolkit", "airflow/dags"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+pythonpath = ["toolkit"]
+testpaths = ["tests"]
