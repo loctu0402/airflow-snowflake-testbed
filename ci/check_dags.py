@@ -1,5 +1,3 @@
-"""Import every DAG the way the dag-processor does and resolve every SQL file a task names."""
-
 import os
 import sys
 import tempfile
@@ -17,7 +15,7 @@ def main(folder: str) -> int:
 
     from airflow.dag_processing.dagbag import DagBag
 
-    bag = DagBag(dag_folder=str(dags), include_examples=False)
+    bag = DagBag(dag_folder=str(dags))
     failures = [f"{Path(path).name}: {error.strip().splitlines()[-1]}" for path, error in bag.import_errors.items()]
     for dag_id, dag in sorted(bag.dags.items()):
         dag.resolve_template_files()
